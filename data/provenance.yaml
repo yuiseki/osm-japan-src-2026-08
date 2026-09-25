@@ -1,0 +1,135 @@
+# Where this data comes from. Everything needed to rebuild it.
+source:
+  name: OpenStreetMap planet
+  file: planet-260831.osm.pbf
+  snapshot: 2026-08-31
+  url: https://planet.openstreetmap.org/pbf/planet-260831.osm.pbf
+  size: 94612383571
+  md5: c67437924cf55de40e8708c7192f354d
+  md5_verified: 2026-09-25
+  retention_note: |
+    OSM keeps its dated planet files for about ten years, so this URL is
+    expected to outlive most copies of this dataset. It is the one link that
+    makes the whole chain checkable: fetch it, verify the md5, and every step
+    below can be run again.
+  license: ODbL
+  license_note: |
+    OSM distributes planet files under ODbL, and this extract inherits it:
+    attribute the source, and share alike if you redistribute a modified
+    version.
+
+extent:
+  name: 日本 / Japan
+  rule: |
+    The administrative relation at admin_level=2 carrying ISO3166-1=JP, and
+    nothing else.
+  count: 47 prefectures
+  boundary_file: japan_osm_boundary.geojson
+  boundary_note: |
+    Derived from the same snapshot as the data. Taking it from anywhere else
+    invites a vintage mismatch: in the Tokyo cut of this same planet file, a
+    boundary drawn a year earlier dropped way/1553541361, created 2026-08-30,
+    which broke Setagaya's ring and with it every area query for that ward.
+    Nothing in the totals showed it.
+  boundary_note_2: |
+    Natural Earth is not consulted. Its 10m coastline runs inland of the
+    reclaimed land around Tokyo Bay and drops about a quarter of the special
+    wards' area; the same class of error on a country outline removes ports
+    and reclaimed land everywhere.
+
+extraction:
+  tool: osmium-tool 1.16.0 (libosmium 2.20.0)
+  strategy: complete_ways
+  steps:
+    - bbox: 122.0,20.0,154.5,46.2
+      note: |
+        Deliberately generous. It reaches into Korea, Sakhalin, the Kurils and
+        Taiwan, because the real border is cut afterwards with an outline
+        derived from this same file.
+      output: japan-bbox-260831.osm.pbf, 3,383,314,581 bytes
+    - polygon: japan_osm_boundary.geojson
+      output: japan-260831.osm.pbf, 2,807,823,198 bytes
+  note: |
+    A way with at least one node inside Japan is kept whole, including the
+    nodes that fall outside. Nothing is cut at the boundary, so the bounding
+    box of the result reaches past the outline: the Ogasawara ferry route is
+    one way running a thousand kilometres out to sea.
+
+parquet:
+  built_from: japan-260831.osm.pbf
+  chain:
+    - tool: osm2pgsql
+      version: 1.11.0
+      output: pgsql (classic)
+      style: default.style, md5 ca34bbc54e6113a4b01e588e8f085f15
+      flags: [--hstore, --cache 8000, --flat-nodes]
+      projection: EPSG:3857 (osm2pgsql's default; no -l, -E or -G)
+      runtime: 701s
+      note: |
+        The style decides which tags become columns, so it is pinned by
+        checksum rather than by the package version. --hstore is not optional
+        here: opening_hours, start_date, building:levels and operator:en are
+        not promoted to columns by this style.
+
+        --cache and --flat-nodes are the two differences from the Tokyo
+        recipe and neither touches the schema. 318 million node locations do
+        not belong in RAM on a machine without swap.
+    - tool: postgis/postgis docker image
+      version: 16-3.4
+    - tool: duckdb
+      version: 1.5.5
+      note: |
+        Reads the PostGIS tables and writes the Parquet. The 1.5 line is
+        required; earlier lines misbehave here.
+  conversions:
+    - column: way
+      from: geometry(*, 3857)
+      to: WKB bytes, still EPSG:3857
+    - column: tags
+      from: hstore
+      to: JSON text
+  unchanged: |
+    The other 68 columns keep the names and types osm2pgsql gave them. No
+    column was invented, renamed or dropped, and the projection was not
+    changed, so a query written against planet_osm_point in PostGIS reads
+    almost the same against the Parquet.
+
+rows:
+  planet_osm_point: 3720141
+  planet_osm_line: 12259617
+  planet_osm_polygon: 33281956
+  planet_osm_roads: 762255
+
+objects:
+  nodes: 318225406
+  ways: 45679976
+  relations: 241943
+  first_timestamp: 2007-07-03T14:12:14Z
+  last_timestamp: 2026-08-30T23:59:34Z
+
+verification:
+  extract_md5: |
+    japan-260831.osm.pbf is 2f803a54de5bdeb5ecbbb740c9b5100d, and re-cutting
+    it from japan-bbox-260831.osm.pbf with the same outline reproduces those
+    bytes exactly.
+  planet_md5: |
+    The 94 GB planet file on disk was checksummed in full on 2026-09-25 and
+    matches the md5 recorded above.
+  prefecture_rings: 1918/1918 boundary ways present, no prefecture incomplete
+  place_nodes: 47/47 prefectures have a place node in the extract
+
+not_included:
+  - what: the sea around Japan beyond the OSM outline
+    reason: |
+      Japan's admin_level=2 relation follows the coast and the maritime
+      borders, so the cut is a superset of the land but not of the whole EEZ.
+  - what: a -G / --multi-geometry load
+    reason: |
+      Left at osm2pgsql's default, so a multipolygon relation occupies several
+      rows sharing one negated osm_id. Aggregate before measuring an area or
+      a distance to a boundary.
+  - what: an Overpass database
+    reason: |
+      The script is in the repository and works, but a country-sized Overpass
+      import is long enough that it is not part of the published artifact.
+      The pbf is what it would be built from.

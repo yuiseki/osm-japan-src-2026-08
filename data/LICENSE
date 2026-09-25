@@ -12,10 +12,10 @@ under ODbL:
   https://planet.openstreetmap.org/pbf/planet-260831.osm.pbf
   94,612,383,571 bytes, md5 c67437924cf55de40e8708c7192f354d
 
-That snapshot of 2026-08-31 is the only source. The
-extract covers the 23 special wards of Tokyo and nothing else. The boundary
-used to cut it is itself taken from that same snapshot, so the geometry in
-tokyo23_osm_boundary.geojson is OSM data too and carries ODbL.
+That snapshot of 2026-08-31 is the only source. The extract covers Japan and
+nothing else. The outline used to cut it is itself taken from that same
+snapshot, so the geometry in japan_osm_boundary.geojson is OSM data too and
+carries ODbL.
 
 The Parquet files under parquet/ are the same records loaded into PostGIS with
 osm2pgsql and written back out. They are a reformatting, not new data, and
