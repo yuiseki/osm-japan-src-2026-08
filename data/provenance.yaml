@@ -78,21 +78,71 @@ parquet:
       version: 16-3.4
     - tool: duckdb
       version: 1.5.5
+      script: scripts/07_export_parquet.py
+      output: tmp/parquet-export/ (not published)
       note: |
-        Reads the PostGIS tables and writes the Parquet. The 1.5 line is
+        Reads the PostGIS tables and writes the Parquet, in the order PostGIS
+        returns rows and with no GeoParquet metadata. The 1.5 line is
         required; earlier lines misbehave here.
+    - tool: duckdb (Python) with the spatial extension
+      version: 1.5.6
+      script: scripts/08_relayout_parquet.py
+      output: parquet/ (published)
+      done: 2026-10-06
+      note: |
+        Rewrites the export of 07 for spatial reading. No value changes; 09
+        checks that.
+      order: |
+        ST_Hilbert of the bbox centre of each geometry, over the whole
+        EPSG:3857 square (+-20037508.342789244 m, 16 bits an axis), then
+        osm_id, then the WKB bytes. No DOUBLE column is a sort key: DuckDB
+        1.5.6 returns -0.0 as 0.0 from a DOUBLE used directly in ORDER BY.
+      row_groups: |
+        Sized to about 32 MiB uncompressed from each table's own bytes per
+        row: point 276,480 rows (14 groups), line 135,168 (91), polygon
+        163,840 (204), roads 57,344 (14). Groups of 128 MiB were tried first
+        and pruned badly (11 of 51 polygon groups for a 1 km box).
+      covering: |
+        bbox struct<xmin, ymin, xmax, ymax> of doubles, equal to
+        ST_Extent(way) on every row, appended after the osm2pgsql columns.
+      geo_metadata: |
+        GeoParquet 1.1.0. primary_column way, encoding WKB, geometry_types
+        [Point] / [LineString] / [Polygon] / [LineString], the extent, the
+        bbox covering, and crs as the PROJJSON of EPSG:3857 from the PROJ
+        database (PROJ 9.1.1) inside DuckDB spatial.
+      crs_evidence: |
+        05_load_postgis.sh passes no -l, -E or -G, so osm2pgsql 1.11 uses its
+        default EPSG:3857, which is what PostGIS records as
+        geometry(*, 3857). ST_AsBinary drops the SRID, so it was checked from
+        the numbers: node 2149761647 (東京, railway=station) is
+        (15558758.54, 4256850.67) in the export, and the inverse of EPSG:3857
+        gives 139.766706, 35.6812546, its OSM position.
+      verification: |
+        scripts/09_verify_parquet.py on all four tables against the export:
+        same 70 columns in order, same row count and same hash digests over
+        every column (way as bytes, FLOAT as text), same -0.0 and NaN counts,
+        Hilbert order, bbox = ST_Extent(way), and the geo metadata equal to
+        the one recomputed from the data. All passed on 2026-10-06. An exact
+        EXCEPT ALL of all columns in both directions also returned 0 rows for
+        each table.
   conversions:
     - column: way
       from: geometry(*, 3857)
-      to: WKB bytes, still EPSG:3857
+      to: WKB bytes, still EPSG:3857, declared in the GeoParquet metadata
     - column: tags
       from: hstore
       to: JSON text
+  added:
+    - column: bbox
+      what: struct<xmin, ymin, xmax, ymax> of doubles, ST_Extent(way) in EPSG:3857
+      why: |
+        Its row group statistics let a reader skip groups for a bbox query.
+        WKB bytes have no usable statistics.
   unchanged: |
-    The other 68 columns keep the names and types osm2pgsql gave them. No
-    column was invented, renamed or dropped, and the projection was not
-    changed, so a query written against planet_osm_point in PostGIS reads
-    almost the same against the Parquet.
+    The other 68 columns keep the names and types osm2pgsql gave them, in
+    the same order. No column was renamed or dropped and the projection was
+    not changed, so a query written against planet_osm_point in PostGIS reads
+    almost the same against the Parquet. The only column added is bbox, last.
 
 rows:
   planet_osm_point: 3720141
